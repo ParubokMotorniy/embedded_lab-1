@@ -1,6 +1,7 @@
-//founding assumptions:
+// founding assumptions:
 // + The press state does not change in between the frames
 // + The frame duration is much shorter than one can press and release a button
+// + The state of button will eventually stabilize over time when it is not pressed
 
 enum class FrameType {
   STANDBYOFF,
@@ -15,7 +16,7 @@ struct Frame {
   FrameType frameType{ FrameType::STANDBYOFF };
 };
 
-constexpr size_t frameDurationMs = 40;
+constexpr size_t frameDurationMs = 50;
 constexpr size_t minPressSequenceExitConfirmationFrames = 3;
 
 //mappings
@@ -45,14 +46,31 @@ void incrementLedCounter() {
   static uint8_t currentCount = 0;
   ++currentCount;
 
+  Serial.print("+++++ [Count to display] +++++ ");
+  Serial.println(currentCount);
+
   int leds[] = { led1, led2, led3, led4 };
   for (int i = 0; i < numLeds; ++i) {
     digitalWrite(leds[i], (currentCount >> i) & 0x01);
   }
 }
 
-void toggleDiodes(int newState) {
-  //TODO: apply new state to all diodes
+void toggleLedsOn() {
+  Serial.println("+++++ [Toggling LEDs on] +++++");
+
+  int leds[] = { led1, led2, led3, led4 };
+  for (int i = 0; i < numLeds; ++i) {
+    digitalWrite(leds[i], HIGH);
+  }
+}
+
+void toggleLedsOff() {
+  Serial.println("+++++ [Toggling LEDs off] +++++");
+
+  int leds[] = { led1, led2, led3, led4 };
+  for (int i = 0; i < numLeds; ++i) {
+    digitalWrite(leds[i], LOW);
+  }
 }
 
 void assignFrameType(Frame &frame) {
@@ -67,73 +85,87 @@ void assignFrameType(Frame &frame) {
 
   if (frame.frameStartLevel == HIGH && frame.frameEndLevel == LOW)
     frame.frameType = FrameType::OFFTOON;
-
-  switch (frame.frameType) {
-    case FrameType::ONTOOFF:
-      Serial.println("Type: on to off");
-
-    case FrameType::OFFTOON:
-      Serial.println("Type: off to on");
-
-    case FrameType::STANDBYON:
-      Serial.println("Type: steady on");
-
-    case FrameType::STANDBYOFF:
-      Serial.println("Type: steady off");
-  }
 }
 
-bool pressSequenceInProgress = false;
-bool pressExitSequenceInProgress = false;
+struct ButtonState {
+  Frame previousFrame{};
+  Frame currentFrame{};
 
-size_t pressFramesElapsed{ 0 };
-size_t exitFramesElapsed{ 0 };
+  bool pressSequenceInProgress = false;
+  bool pressExitSequenceInProgress = false;
+
+  size_t exitFramesElapsed{ 0 };
+};
+
+using PressAction = void (*)(void);
+
+void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction, PressAction onPressEndAction) {
+  if (!buttonState.pressSequenceInProgress) {  //only check if press sequence can be started
+    if (buttonState.previousFrame.frameType == FrameType::STANDBYOFF && buttonState.currentFrame.frameType == FrameType::OFFTOON) {
+      buttonState.pressSequenceInProgress = true;
+      Serial.println("----- [Press sequence start detected #1] -----");
+      if (onPressStartAction != nullptr)
+        onPressStartAction();
+    }
+  } else {
+    if (!buttonState.pressExitSequenceInProgress) {
+      //start exit sequence
+      if (buttonState.previousFrame.frameType == FrameType::ONTOOFF && buttonState.currentFrame.frameType == FrameType::STANDBYOFF) {
+        buttonState.pressExitSequenceInProgress = true;
+        Serial.println("----- [Exit sequence start detected #2] -----");
+      }
+    } else {
+      if (buttonState.currentFrame.frameType != FrameType::STANDBYOFF) {  //go back to press sequence
+        Serial.println("----- [Going back to press sequence!] -----");
+        buttonState.pressExitSequenceInProgress = false;
+      } else if (buttonState.exitFramesElapsed >= minPressSequenceExitConfirmationFrames)  //or leave all sequences
+      {
+        Serial.println("----- [Press sequence end detected #3] -----");
+
+        buttonState.pressExitSequenceInProgress = false;
+        buttonState.pressSequenceInProgress = false;
+        buttonState.exitFramesElapsed = 0;
+
+        if (onPressEndAction != nullptr)
+          onPressEndAction();
+      } else  //or count exit frames
+      {
+        ++buttonState.exitFramesElapsed;
+      }
+    }
+  }
+
+  buttonState.previousFrame = buttonState.currentFrame;
+}
 
 //frame state
 auto pollStart = millis();
 bool ifResetFrameState = true;
-Frame previousFrame{};
-Frame currentFrame{};
+
+ButtonState incrementButtonState{};
+ButtonState toggleButtonState{};
 
 void loop() {
   if (ifResetFrameState) {
     //reset the state
-    currentFrame.frameStartLevel = digitalRead(buttonIncrement);
+    // incrementButtonState.currentFrame.frameStartLevel = digitalRead(buttonIncrement);
+    toggleButtonState.currentFrame.frameStartLevel = digitalRead(buttonToggle);
+
     pollStart = millis();
     ifResetFrameState = false;
   }
 
   if (millis() - pollStart >= frameDurationMs) {
     //process frame
-    currentFrame.frameEndLevel = digitalRead(buttonIncrement);
-    assignFrameType(currentFrame);
+    // incrementButtonState.currentFrame.frameEndLevel = digitalRead(buttonIncrement);
+    // assignFrameType(incrementButtonState.currentFrame);
 
-    if (!pressSequenceInProgress) {  //only check if press sequence can be started
-      if (previousFrame.frameType == FrameType::STANDBYOFF && currentFrame.frameType == FrameType::OFFTOON)
-        pressSequenceInProgress = true;
+    toggleButtonState.currentFrame.frameEndLevel = digitalRead(buttonToggle);
+    assignFrameType(toggleButtonState.currentFrame);
 
-    } else {
-      if (!pressExitSequenceInProgress) {
-        //start exit sequence
-        if (previousFrame.frameType == FrameType::ONTOOFF && currentFrame.frameType == FrameType::STANDBYOFF){
-          pressExitSequenceInProgress = true;
-        } 
-      } else {
-        if (currentFrame.frameType != FrameType::STANDBYOFF) //go back to press sequence
-          pressExitSequenceInProgress = false;
-        else if (exitFramesElapsed >= minPressSequenceExitConfirmationFrames)  //or leave all sequences
-        {
-          pressExitSequenceInProgress = false;
-          pressSequenceInProgress = false;
-          incrementLedCounter();
-        } else  //or count exit frames
-        {
-          ++exitFramesElapsed;
-        }
-      }
-    }
+    // processButtonInput(incrementButtonState, nullptr, &incrementLedCounter);
+    processButtonInput(toggleButtonState, &toggleLedsOn, &toggleLedsOff);
 
-    previousFrame = currentFrame;
     ifResetFrameState = true;
   }
 }
