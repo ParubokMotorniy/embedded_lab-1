@@ -16,8 +16,9 @@ struct Frame {
   FrameType frameType{ FrameType::STANDBYOFF };
 };
 
-constexpr size_t frameDurationMs = 50;
+constexpr size_t frameDurationMs = 40;
 constexpr size_t minPressSequenceExitConfirmationFrames = 3;
+constexpr size_t minPressSequenceEnterConfirmationFrames = 8;
 
 //mappings
 constexpr int buttonIncrement = 9;  //k2
@@ -92,46 +93,51 @@ struct ButtonState {
   Frame currentFrame{};
 
   bool pressSequenceInProgress = false;
-  bool pressExitSequenceInProgress = false;
+  bool startDetected = false;
 
   size_t exitFramesElapsed{ 0 };
+  size_t enterFramesElapsed{ 0 };
 };
 
 using PressAction = void (*)(void);
 
 void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction, PressAction onPressEndAction) {
   if (!buttonState.pressSequenceInProgress) {  //only check if press sequence can be started
-    if (buttonState.previousFrame.frameType == FrameType::STANDBYOFF && buttonState.currentFrame.frameType == FrameType::OFFTOON) {
+    if (buttonState.previousFrame.frameType == FrameType::STANDBYOFF && buttonState.currentFrame.frameType != FrameType::STANDBYOFF) {
+      Serial.println("----- [Transition from low #0] -----");
       buttonState.pressSequenceInProgress = true;
+    }
+  } else {
+    switch (buttonState.currentFrame.frameType) {
+      case FrameType::STANDBYOFF:
+        ++buttonState.exitFramesElapsed;
+        buttonState.enterFramesElapsed = 0;
+        break;
+      case FrameType::STANDBYON:
+      case FrameType::OFFTOON:
+      case FrameType::ONTOOFF:
+        ++buttonState.enterFramesElapsed;
+        buttonState.exitFramesElapsed = 0;
+        break;
+    }
+
+    if (buttonState.enterFramesElapsed >= minPressSequenceEnterConfirmationFrames && !buttonState.startDetected) {
       Serial.println("----- [Press sequence start detected #1] -----");
+      buttonState.startDetected = true;
       if (onPressStartAction != nullptr)
         onPressStartAction();
     }
-  } else {
-    if (!buttonState.pressExitSequenceInProgress) {
-      //start exit sequence
-      if (buttonState.previousFrame.frameType == FrameType::ONTOOFF && buttonState.currentFrame.frameType == FrameType::STANDBYOFF) {
-        buttonState.pressExitSequenceInProgress = true;
-        Serial.println("----- [Exit sequence start detected #2] -----");
-      }
-    } else {
-      if (buttonState.currentFrame.frameType != FrameType::STANDBYOFF) {  //go back to press sequence
-        Serial.println("----- [Going back to press sequence!] -----");
-        buttonState.pressExitSequenceInProgress = false;
-      } else if (buttonState.exitFramesElapsed >= minPressSequenceExitConfirmationFrames)  //or leave all sequences
-      {
-        Serial.println("----- [Press sequence end detected #3] -----");
 
-        buttonState.pressExitSequenceInProgress = false;
-        buttonState.pressSequenceInProgress = false;
-        buttonState.exitFramesElapsed = 0;
+    if (buttonState.exitFramesElapsed >= minPressSequenceExitConfirmationFrames) {
+      Serial.println("----- [Press sequence end detected #2] -----");
 
-        if (onPressEndAction != nullptr)
-          onPressEndAction();
-      } else  //or count exit frames
-      {
-        ++buttonState.exitFramesElapsed;
-      }
+      if (onPressEndAction != nullptr && buttonState.startDetected)
+        onPressEndAction();
+
+      buttonState.pressSequenceInProgress = false;
+      buttonState.exitFramesElapsed = 0;
+      buttonState.enterFramesElapsed = 0;
+      buttonState.startDetected = 0;
     }
   }
 
@@ -140,32 +146,26 @@ void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction
 
 //frame state
 auto pollStart = millis();
-bool ifResetFrameState = true;
 
 ButtonState incrementButtonState{};
 ButtonState toggleButtonState{};
 
 void loop() {
-  if (ifResetFrameState) {
-    //reset the state
-    // incrementButtonState.currentFrame.frameStartLevel = digitalRead(buttonIncrement);
-    toggleButtonState.currentFrame.frameStartLevel = digitalRead(buttonToggle);
-
-    pollStart = millis();
-    ifResetFrameState = false;
-  }
 
   if (millis() - pollStart >= frameDurationMs) {
     //process frame
-    // incrementButtonState.currentFrame.frameEndLevel = digitalRead(buttonIncrement);
-    // assignFrameType(incrementButtonState.currentFrame);
+    incrementButtonState.currentFrame.frameEndLevel = digitalRead(buttonIncrement);
+    assignFrameType(incrementButtonState.currentFrame);
 
-    toggleButtonState.currentFrame.frameEndLevel = digitalRead(buttonToggle);
-    assignFrameType(toggleButtonState.currentFrame);
+    // toggleButtonState.currentFrame.frameEndLevel = digitalRead(buttonToggle);
+    // assignFrameType(toggleButtonState.currentFrame);
 
-    // processButtonInput(incrementButtonState, nullptr, &incrementLedCounter);
-    processButtonInput(toggleButtonState, &toggleLedsOn, &toggleLedsOff);
+    processButtonInput(incrementButtonState, nullptr, &incrementLedCounter);
+    // processButtonInput(toggleButtonState, &toggleLedsOn, &toggleLedsOff);
 
-    ifResetFrameState = true;
+    incrementButtonState.currentFrame.frameStartLevel = digitalRead(buttonIncrement);
+    // toggleButtonState.currentFrame.frameStartLevel = digitalRead(buttonToggle);
+
+    pollStart = millis();
   }
 }
