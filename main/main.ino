@@ -16,7 +16,7 @@ struct Frame {
 };
 
 constexpr size_t frameDurationMs = 40;
-constexpr size_t minPressFrames = 5;
+constexpr size_t minPressSequenceExitConfirmationFrames = 3;
 
 //mappings
 constexpr int buttonIncrement = 9;  //k2
@@ -41,7 +41,7 @@ void setup() {
   Serial.begin(9600);
 }
 
-void incrementDiodeCounter() {
+void incrementLedCounter() {
   static uint8_t currentCount = 0;
   ++currentCount;
 
@@ -84,38 +84,56 @@ void assignFrameType(Frame &frame) {
 }
 
 bool pressSequenceInProgress = false;
+bool pressExitSequenceInProgress = false;
+
 size_t pressFramesElapsed{ 0 };
+size_t exitFramesElapsed{ 0 };
+
+//frame state
+auto pollStart = millis();
+bool ifResetFrameState = true;
 Frame previousFrame{};
 Frame currentFrame{};
 
-auto pollStart = millis();
-bool ifResetTheState = true;
-
 void loop() {
-  if (ifResetTheState) {
+  if (ifResetFrameState) {
     //reset the state
     currentFrame.frameStartLevel = digitalRead(buttonIncrement);
     pollStart = millis();
-    ifResetTheState = false;
+    ifResetFrameState = false;
   }
 
   if (millis() - pollStart >= frameDurationMs) {
     //process frame
     currentFrame.frameEndLevel = digitalRead(buttonIncrement);
-
     assignFrameType(currentFrame);
 
-    if (!pressSequenceInProgress) {
+    if (!pressSequenceInProgress) {  //only check if press sequence can be started
       if (previousFrame.frameType == FrameType::STANDBYOFF && currentFrame.frameType == FrameType::OFFTOON)
         pressSequenceInProgress = true;
+
     } else {
-      if (previousFrame.frameType == FrameType::ONTOOFF && currentFrame.frameType == FrameType::STANDBYOFF) {
-        pressSequenceInProgress = false;
-        incrementDiodeCounter();
+      if (!pressExitSequenceInProgress) {
+        //start exit sequence
+        if (previousFrame.frameType == FrameType::ONTOOFF && currentFrame.frameType == FrameType::STANDBYOFF){
+          pressExitSequenceInProgress = true;
+        } 
+      } else {
+        if (currentFrame.frameType != FrameType::STANDBYOFF) //go back to press sequence
+          pressExitSequenceInProgress = false;
+        else if (exitFramesElapsed >= minPressSequenceExitConfirmationFrames)  //or leave all sequences
+        {
+          pressExitSequenceInProgress = false;
+          pressSequenceInProgress = false;
+          incrementLedCounter();
+        } else  //or count exit frames
+        {
+          ++exitFramesElapsed;
+        }
       }
     }
 
     previousFrame = currentFrame;
-    ifResetTheState = true;
+    ifResetFrameState = true;
   }
 }
