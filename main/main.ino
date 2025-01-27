@@ -48,7 +48,7 @@ void incrementLedCounter() {
   static uint8_t currentCount = 0;
   ++currentCount;
 
-  Serial.println(String("+++++ [Count to display:") + String(currentCount) + String(" ] +++++ "));
+  Serial.println(String("+++++ [Count to display: ") + String(currentCount) + String(" ] +++++ "));
 
   int leds[] = { led1, led2, led3, led4 };
   for (int i = 0; i < numLeds; ++i) {
@@ -113,6 +113,8 @@ using PressAction = void (*)(void);
 
 //this function essentilly does debouncing
 void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction, PressAction onPressEndAction) {
+  assignFrameType(buttonState.currentFrame);
+
   if (!buttonState.pressSequenceInProgress) {  //only check if press sequence can be started
     if (buttonState.previousFrame.frameType == FrameType::STANDBYOFF && buttonState.currentFrame.frameType != FrameType::STANDBYOFF) {
       Serial.println("\n----- [Transition from low to noise #0] -----");
@@ -127,15 +129,16 @@ void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction
         if (buttonState.previousFrame.frameType == FrameType::STANDBYON)
           ++buttonState.stats.numOffs;
         break;
+
+      case FrameType::STANDBYON:
+        if (buttonState.previousFrame.frameType == FrameType::STANDBYOFF)
+          ++buttonState.stats.numOns;
       case FrameType::OFFTOON:
         ++buttonState.stats.numOns;
       case FrameType::ONTOOFF:
         ++buttonState.stats.numOffs;
-      case FrameType::STANDBYON:
         ++buttonState.enterFramesElapsed;
         buttonState.exitFramesElapsed = 0;
-        if (buttonState.previousFrame.frameType == FrameType::STANDBYOFF)
-          ++buttonState.stats.numOns;
         break;
     }
 
@@ -147,14 +150,14 @@ void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction
         onPressStartAction();
     }
 
-    //and here we determine if its digital level has already stabilized to infer the end of press
+    //and here we determine if its digital level has already stabilized to infer the end of press sequence
     if (buttonState.exitFramesElapsed >= minPressSequenceExitConfirmationFrames) {
       Serial.println("\n----- [Press sequence end detected #2] -----");
 
       Serial.println("\n????? Statistics ?????");
       if (onPressEndAction != nullptr && buttonState.startDetected) {
         onPressEndAction();
-        Serial.println(String("===== [Total press duration: ") + String(millis() - buttonState.stats.pressStart) + String("] ====="));
+        Serial.println(String("===== [Total press duration: ") + String(millis() - buttonState.stats.pressStart) + String(" ms] ====="));
       }
 
       Serial.println(String("===== [Perceived button presses: ") + String(buttonState.stats.numOns) + String("] ====="));
@@ -182,16 +185,14 @@ void loop() {
   if (millis() - pollStart >= frameDurationMs) {
     //records the end levels
     incrementButtonState.currentFrame.frameEndLevel = digitalRead(buttonIncrement);
-    assignFrameType(incrementButtonState.currentFrame);
-
     toggleButtonState.currentFrame.frameEndLevel = digitalRead(buttonToggle);
-    assignFrameType(toggleButtonState.currentFrame);
 
-    //updates the buttons
+    //processes and updates the buttons
     processButtonInput(incrementButtonState, nullptr, &incrementLedCounter);
     processButtonInput(toggleButtonState, &toggleLedsOn, &toggleLedsOff);
 
-    //records the start levels
+
+    //records the new start levels
     incrementButtonState.currentFrame.frameStartLevel = digitalRead(buttonIncrement);
     toggleButtonState.currentFrame.frameStartLevel = digitalRead(buttonToggle);
 
