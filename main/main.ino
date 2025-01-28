@@ -18,8 +18,8 @@ struct Frame {
 
 //this should be fine-tuned
 constexpr size_t frameDurationMs = 40;
-constexpr size_t minPressSequenceExitConfirmationFrames = 5;
-constexpr size_t minPressSequenceEnterConfirmationFrames = 8;
+constexpr size_t minPressSequenceExitConfirmationFrames = 4;
+constexpr size_t minPressSequenceEnterConfirmationFrames = 1;
 
 //mappings
 constexpr int buttonIncrement = 9;  //k2
@@ -35,6 +35,9 @@ void setup() {
   pinMode(buttonIncrement, INPUT);
   pinMode(buttonToggle, INPUT);
 
+  digitalWrite(buttonIncrement, HIGH);
+  digitalWrite(buttonToggle, HIGH);
+
   pinMode(led1, OUTPUT);
   pinMode(led2, OUTPUT);
   pinMode(led3, OUTPUT);
@@ -48,7 +51,7 @@ void incrementLedCounter() {
   static uint8_t currentCount = 0;
   ++currentCount;
 
-  Serial.println(String("+++++ [Count to display: ") + String(currentCount) + String(" ] +++++ "));
+  Serial.println(String("+++++ [Count to display: ") + String(currentCount & 0x0F) + String(" ] +++++ "));
 
   int leds[] = { led1, led2, led3, led4 };
   for (int i = 0; i < numLeds; ++i) {
@@ -150,7 +153,7 @@ void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction
         onPressStartAction();
     }
 
-    //and here we determine if its digital level has already stabilized to infer the end of press sequence
+    //and here we determine if its digital level has already stabilized in order to infer the end of press sequence
     if (buttonState.exitFramesElapsed >= minPressSequenceExitConfirmationFrames) {
       Serial.println("\n----- [Press sequence end detected #2] -----");
 
@@ -174,16 +177,14 @@ void processButtonInput(ButtonState &buttonState, PressAction onPressStartAction
   buttonState.previousFrame = buttonState.currentFrame;
 }
 
-//frame state
 auto pollStart = millis();
-
 ButtonState incrementButtonState{};
 ButtonState toggleButtonState{};
 
 void loop() {
 
   if (millis() - pollStart >= frameDurationMs) {
-    //records the end levels
+    //records the end levels of buttons for the old frame
     incrementButtonState.currentFrame.frameEndLevel = digitalRead(buttonIncrement);
     toggleButtonState.currentFrame.frameEndLevel = digitalRead(buttonToggle);
 
@@ -192,7 +193,7 @@ void loop() {
     processButtonInput(toggleButtonState, &toggleLedsOn, &toggleLedsOff);
 
 
-    //records the new start levels
+    //records the start levels of buttons for new frame
     incrementButtonState.currentFrame.frameStartLevel = digitalRead(buttonIncrement);
     toggleButtonState.currentFrame.frameStartLevel = digitalRead(buttonToggle);
 
